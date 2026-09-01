@@ -1,7 +1,24 @@
-name: Release
+name: Release Packages
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish release to GitHub Releases'
+        type: boolean
+        required: true
+        default: true
+      custom_version:
+        description: 'Custom version override (optional, defaults to VERSION file)'
+        type: string
+        required: false
+      custom_iteration:
+        description: 'Custom iteration override (optional, defaults to ITERATION file)'
+        type: string
+        required: false
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build-and-package:
@@ -53,10 +70,15 @@ jobs:
           restore-keys: |
             ccache-${{ matrix.arch }}-${{ matrix.cpu_target }}-
 
-      - name: Set env variables
+      - name: Resolve Version & Iteration
         run: |
-          echo "VERSION=$(cat VERSION)" >> $GITHUB_ENV
-          echo "ITERATION=$(cat ITERATION)" >> $GITHUB_ENV
+          VERSION="${{ inputs.custom_version }}"
+          [ -z "$VERSION" ] && VERSION="$(cat VERSION)"
+          ITERATION="${{ inputs.custom_iteration }}"
+          [ -z "$ITERATION" ] && ITERATION="$(cat ITERATION)"
+
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "ITERATION=$ITERATION" >> $GITHUB_ENV
 
       - name: Build Kvrocks
         run: |
@@ -132,3 +154,45 @@ jobs:
             *.deb
             *.rpm
           if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-and-package
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release != false)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Resolve Release Tag & Name
+        run: |
+          VERSION="${{ inputs.custom_version }}"
+          [ -z "$VERSION" ] && VERSION="$(cat VERSION)"
+          ITERATION="${{ inputs.custom_iteration }}"
+          [ -z "$ITERATION" ] && ITERATION="$(cat ITERATION)"
+
+          echo "RELEASE_TAG=v${VERSION}-${ITERATION}" >> $GITHUB_ENV
+          echo "RELEASE_NAME=Kvrocks ${VERSION}-${ITERATION}" >> $GITHUB_ENV
+
+      - name: Generate Checksums
+        run: |
+          cd dist
+          sha256sum *.deb *.rpm > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_NAME }}
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
