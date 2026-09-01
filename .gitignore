@@ -1,0 +1,11 @@
+# Build and staging directories
+release/
+rpm-release/
+rootfs/
+dist/
+kvrocks/
+*.deb
+*.rpm
+*.tar.gz
+*.tar.xz
+SHA256SUMS

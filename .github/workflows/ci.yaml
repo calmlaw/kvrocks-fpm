@@ -1,28 +1,21 @@
 name: Release
 
-on: workflow_dispatch
-
-env:
-  DEB_FPM_OPTS: >-
-    --prefix '/usr'
-    --config-files /usr/share/kvrocks/kvrocks.conf
-  COMMON_FPM_OPTS: >-
-    -s dir -n kvrocks --verbose -a native
-    --description 'A distributed key value NoSQL database that uses RocksDB as storage engine and is compatible with Redis protocol'
-    --url 'https://kvrocks.apache.org' --license 'Apache-2.0'
+on:
+  workflow_dispatch:
 
 jobs:
   release-packages:
     name: Release DEB & RPM Package
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4.0.0
-        with:
-          fetch-depth: 64
+      - uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install Dependencies & FPM
         run: |
-          sudo apt-get install -y git build-essential cmake libtool python3
+          sudo apt-get update
+          sudo apt-get install -y git build-essential cmake libtool python3 \
+                                  ruby ruby-dev rubygems rpm libssl-dev
+          sudo gem install --no-document fpm
 
       - name: Set env variables
         run: |
@@ -31,53 +24,71 @@ jobs:
 
       - name: Build
         run: |
-          git clone -b v$VERSION https://github.com/apache/kvrocks
+          git clone --depth 1 -b v${{ env.VERSION }} https://github.com/apache/kvrocks.git
           cd kvrocks
           ./x.py build -DPORTABLE=1 -DCMAKE_BUILD_TYPE=Release -j $(nproc)
-      
-      - name: Make DEB release directory
+
+      - name: Prepare Packaging RootFS
         run: |
-          mkdir release
-          mkdir release/bin release/share
-          mkdir release/share/kvrocks
-          cp kvrocks/build/kvrocks release/bin/
-          cp kvrocks/build/kvrocks2redis release/bin/
-          cp kvrocks/kvrocks.conf release/share/kvrocks
-          cp -r kvrocks/LICENSE kvrocks/NOTICE kvrocks/licenses release/share/kvrocks
-          cp kvrocks/utils/systemd/kvrocks.service release/share/kvrocks
+          mkdir -p rootfs/usr/bin
+          mkdir -p rootfs/etc/kvrocks
+          mkdir -p rootfs/usr/lib/systemd/system
+          mkdir -p rootfs/var/lib/kvrocks
+          mkdir -p rootfs/var/log/kvrocks
+          mkdir -p rootfs/usr/share/doc/kvrocks
+
+          # Binaries
+          cp kvrocks/build/kvrocks rootfs/usr/bin/
+          cp kvrocks/build/kvrocks2redis rootfs/usr/bin/
+
+          # Configuration
+          cp kvrocks/kvrocks.conf rootfs/etc/kvrocks/kvrocks.conf
+
+          # Systemd service unit
+          cp kvrocks/utils/systemd/kvrocks.service rootfs/usr/lib/systemd/system/
+
+          # License & Notice
+          cp -r kvrocks/LICENSE kvrocks/NOTICE kvrocks/licenses rootfs/usr/share/doc/kvrocks/
 
       - name: Package DEB
-        uses: bpicode/github-action-fpm@v0.9.3
-        with:
-          fpm_args: '.'
-          fpm_opts: '-t deb -v ${{ env.VERSION }} --iteration ${{ env.ITERATION }} -C release ${{ env.COMMON_FPM_OPTS }} ${{ env.DEB_FPM_OPTS }}'
-      
-      - name: Make RPM release directory
         run: |
-          mkdir -p rpm-release/etc/kvrocks
-          mkdir -p rpm-release/usr/bin
-          mkdir -p rpm-release/usr/lib/systemd/system
-          mkdir -p rpm-release/usr/share/licenses/kvrocks
-
-          cp kvrocks/build/kvrocks rpm-release/usr/bin/
-          cp kvrocks/build/kvrocks2redis rpm-release/usr/bin/
-          cp kvrocks/kvrocks.conf rpm-release/etc/kvrocks/
-          cp -r kvrocks/LICENSE kvrocks/NOTICE kvrocks/licenses/* rpm-release/usr/share/licenses/kvrocks/
-          cp kvrocks/utils/systemd/kvrocks.service rpm-release/usr/lib/systemd/system/
+          fpm -s dir -t deb \
+            -n kvrocks \
+            -v "${{ env.VERSION }}" \
+            --iteration "${{ env.ITERATION }}" \
+            -a amd64 \
+            -C rootfs \
+            --config-files /etc/kvrocks/kvrocks.conf \
+            --after-install scripts/postinst.sh \
+            --after-remove scripts/postrm.sh \
+            --description 'A distributed key value NoSQL database that uses RocksDB as storage engine and is compatible with Redis protocol' \
+            --url 'https://kvrocks.apache.org' \
+            --license 'Apache-2.0' \
+            -p "kvrocks_${{ env.VERSION }}-${{ env.ITERATION }}_amd64.deb"
 
       - name: Package RPM
-        uses: bpicode/github-action-fpm@v0.9.3
-        with:
-          fpm_args: '.'
-          fpm_opts: '-t rpm -v ${{ env.VERSION }} --iteration ${{ env.ITERATION }} -C rpm-release ${{ env.COMMON_FPM_OPTS }}'
+        run: |
+          fpm -s dir -t rpm \
+            -n kvrocks \
+            -v "${{ env.VERSION }}" \
+            --iteration "${{ env.ITERATION }}" \
+            -a x86_64 \
+            -C rootfs \
+            --config-files /etc/kvrocks/kvrocks.conf \
+            --after-install scripts/postinst.sh \
+            --after-remove scripts/postrm.sh \
+            --description 'A distributed key value NoSQL database that uses RocksDB as storage engine and is compatible with Redis protocol' \
+            --url 'https://kvrocks.apache.org' \
+            --license 'Apache-2.0' \
+            -p "kvrocks-${{ env.VERSION }}-${{ env.ITERATION }}.x86_64.rpm"
 
       - name: Release
-        uses: softprops/action-gh-release@v2.0.6
+        uses: softprops/action-gh-release@v2
         with:
-          name: |
-            ${{ env.VERSION }}-${{ env.ITERATION }}
+          tag_name: "v${{ env.VERSION }}-${{ env.ITERATION }}"
+          name: "${{ env.VERSION }}-${{ env.ITERATION }}"
           files: |
-            ./*.deb
-            ./*.rpm
+            *.deb
+            *.rpm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
