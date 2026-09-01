@@ -34,14 +34,16 @@ jobs:
             rpm_arch: x86_64
             cpu_target: generic
             cmake_flags: "-DPORTABLE=1 -DENABLE_OPENSSL=ON -DENABLE_LTO=ON"
+            extra_flags: ""
             pkg_suffix: ""
 
-          # Modern CPU optimized x86-64-v3 build (AVX2, BMI2, FMA)
+          # Modern CPU optimized x86-64-v3 build (AVX2, BMI2, FMA, PCLMUL)
           - os: ubuntu-24.04
             arch: amd64
             rpm_arch: x86_64
             cpu_target: v3
-            cmake_flags: "-DPORTABLE=1 -DCMAKE_CXX_FLAGS='-march=x86-64-v3 -O3' -DENABLE_OPENSSL=ON -DENABLE_LTO=ON"
+            cmake_flags: "-DPORTABLE=1 -DENABLE_OPENSSL=ON -DENABLE_LTO=ON"
+            extra_flags: "-march=x86-64-v3 -mpclmul -O3"
             pkg_suffix: "-v3"
 
           # ARM64 / aarch64 build
@@ -50,6 +52,7 @@ jobs:
             rpm_arch: aarch64
             cpu_target: generic
             cmake_flags: "-DPORTABLE=1 -DENABLE_OPENSSL=ON -DENABLE_LTO=ON"
+            extra_flags: ""
             pkg_suffix: ""
 
     steps:
@@ -84,6 +87,10 @@ jobs:
         run: |
           export PATH="/usr/lib/ccache:$PATH"
           export CCACHE_DIR="$HOME/.cache/ccache"
+          if [ -n "${{ matrix.extra_flags }}" ]; then
+            export CFLAGS="${{ matrix.extra_flags }}"
+            export CXXFLAGS="${{ matrix.extra_flags }}"
+          fi
           ccache -z
 
           git clone --depth 1 -b v${{ env.VERSION }} https://github.com/apache/kvrocks.git
